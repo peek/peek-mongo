@@ -1,6 +1,11 @@
 # Glimpse::Mongo
 
-TODO: Write a gem description
+Provide a glimpse into the Mongo commands made within your Rails application.
+
+Things this glimpse view provides:
+
+- Total number of Mongo commands called during the request
+- The duration of the calls made during the request
 
 ## Installation
 
