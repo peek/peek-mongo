@@ -4,7 +4,7 @@ require 'mongo'
 # and the following methods:
 #
 # - :send_message
-# - :send_message_with_safe_check
+# - :send_message_with_gle
 # - :receive_message
 
 # Instrument Mongo time
@@ -24,14 +24,14 @@ class Mongo::Connection
   end
   alias_method_chain :send_message, :timing
 
-  def send_message_with_safe_check_with_timing(*args)
+  def send_message_with_gle_with_timing(*args)
     start = Time.now
-    send_message_with_safe_check_without_timing(*args)
+    send_message_with_gle_without_timing(*args)
   ensure
     Mongo::Connection.command_time += (Time.now - start)
     Mongo::Connection.command_count += 1
   end
-  alias_method_chain :send_message_with_safe_check, :timing
+  alias_method_chain :send_message_with_gle, :timing
 
   def receive_message_with_timing(*args)
     start = Time.now
