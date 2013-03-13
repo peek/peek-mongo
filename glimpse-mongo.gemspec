@@ -18,5 +18,5 @@ Gem::Specification.new do |gem|
   gem.require_paths = ['lib']
 
   gem.add_dependency 'glimpse'
-  gem.add_dependency 'mongo'
+  gem.add_dependency 'mongo', '>= 1.8'
 end
