@@ -1,8 +1,8 @@
-# Glimpse::Mongo
+# Peek::Mongo
 
-Provide a glimpse into the Mongo commands made within your Rails application.
+Take a peek into the Mongo commands made within your Rails application.
 
-Things this glimpse view provides:
+Things this peek view provides:
 
 - Total number of Mongo commands called during the request
 - The duration of the calls made during the request
@@ -11,7 +11,7 @@ Things this glimpse view provides:
 
 Add this line to your application's Gemfile:
 
-    gem 'glimpse-mongo'
+    gem 'peek-mongo'
 
 And then execute:
 
@@ -19,14 +19,14 @@ And then execute:
 
 Or install it yourself as:
 
-    $ gem install glimpse-mongo
+    $ gem install peek-mongo
 
 ## Usage
 
-Add the following to your `config/initializers/glimpse.rb`: 
+Add the following to your `config/initializers/peek.rb`: 
 
 ```ruby
-Glimpse.into Glimpse::Views::Mongo
+Peek.into Peek::Views::Mongo
 ```
 
 ## Contributing

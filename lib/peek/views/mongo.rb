@@ -47,7 +47,7 @@ class Mongo::Connection
   alias_method_chain :receive_message, :timing
 end
 
-module Glimpse
+module Peek
   module Views
     class Mongo < View
       def duration

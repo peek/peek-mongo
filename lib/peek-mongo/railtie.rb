@@ -1,4 +1,4 @@
-module Glimpse
+module Peek
   module Mongo
     class Railtie < ::Rails::Engine
     end
