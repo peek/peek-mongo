@@ -1,58 +1,101 @@
 require 'mongo'
-require 'atomic'
+require 'concurrent'
 
-# At the deepest of all commands in mongo go to Mongo::Connection
+# At the deepest of all commands in mongo go to Mongo::Socket
 # and the following methods:
 #
-# - :send_message
-# - :send_message_with_gle
-# - :receive_message
+# - :read
+# - :write
 
 # Instrument Mongo time
-class Mongo::Connection
-  class << self
-    attr_accessor :command_time, :command_count
-  end
-  self.command_count = Atomic.new(0)
-  self.command_time = Atomic.new(0)
-
-  def send_message_with_timing(*args)
+class Mongo::Socket
+  def read_with_timing(*args, &block)
     start = Time.now
-    send_message_without_timing(*args)
+    read_without_timing(*args, &block)
   ensure
-    duration = (Time.now - start)
-    Mongo::Connection.command_time.update { |value| value + duration }
-    Mongo::Connection.command_count.update { |value| value + 1 }
+    update_counters(start)
   end
-  alias_method_chain :send_message, :timing
+  alias_method_chain :read, :timing
 
-  def send_message_with_gle_with_timing(*args)
+  def write_with_timing(*args, &block)
     start = Time.now
-    send_message_with_gle_without_timing(*args)
+    write_without_timing(*args, &block)
   ensure
-    duration = (Time.now - start)
-    Mongo::Connection.command_time.update { |value| value + duration }
-    Mongo::Connection.command_count.update { |value| value + 1 }
+    update_counters(start)
   end
-  alias_method_chain :send_message_with_gle, :timing
+  alias_method_chain :write, :timing
 
-  def receive_message_with_timing(*args)
-    start = Time.now
-    receive_message_without_timing(*args)
-  ensure
+  def update_counters(start)
     duration = (Time.now - start)
-    Mongo::Connection.command_time.update { |value| value + duration }
-    Mongo::Connection.command_count.update { |value| value + 1 }
+
+    Peek::Views::Mongo.command_time.update { |value| value + duration }
   end
-  alias_method_chain :receive_message, :timing
+end
+
+# a better way to count all Mongo calls, is to look at the payload generation
+module Mongo
+  module Protocol
+    class Query
+      def payload_with_counter
+        payload_without_counter
+      ensure
+        Peek::Views::Mongo.command_count.update { |value| value + 1 }
+      end
+
+      alias_method_chain :payload, :counter
+    end
+
+    class Insert
+      def payload_with_counter
+        payload_without_counter
+      ensure
+        Peek::Views::Mongo.command_count.update { |value| value + 1 }
+      end
+
+      alias_method_chain :payload, :counter
+    end
+
+    class Update
+      def payload_with_counter
+        payload_without_counter
+      ensure
+        Peek::Views::Mongo.command_count.update { |value| value + 1 }
+      end
+
+      alias_method_chain :payload, :counter
+    end
+
+    class GetMore
+      def payload_with_counter
+        payload_without_counter
+      ensure
+        Peek::Views::Mongo.command_count.update { |value| value + 1 }
+      end
+
+      alias_method_chain :payload, :counter
+    end
+
+    class Delete
+      def payload_with_counter
+        payload_without_counter
+      ensure
+        Peek::Views::Mongo.command_count.update { |value| value + 1 }
+      end
+
+      alias_method_chain :payload, :counter
+    end
+  end
 end
 
 module Peek
   module Views
     class Mongo < View
-      def duration
-        ::Mongo::Connection.command_time.value
+      class << self
+        attr_accessor :command_time, :command_count
       end
+
+      self.command_count = Concurrent::AtomicFixnum.new(0)
+      self.command_time = Concurrent::AtomicFixnum.new(0)
 
       def formatted_duration
         ms = duration * 1000
@@ -63,8 +106,12 @@ module Peek
         end
       end
 
+      def duration
+        Peek::Views::Mongo.command_time.value
+      end
+
       def calls
-        ::Mongo::Connection.command_count.value
+        Peek::Views::Mongo.command_count.value
       end
 
       def results
@@ -76,8 +123,8 @@ module Peek
       def setup_subscribers
         # Reset each counter when a new request starts
         before_request do
-          ::Mongo::Connection.command_time.value = 0
-          ::Mongo::Connection.command_count.value = 0
+          Peek::Views::Mongo.command_time.value = 0
+          Peek::Views::Mongo.command_count.value = 0
         end
       end
     end
