@@ -1,101 +1,84 @@
 require 'mongo'
 require 'concurrent'
 
-# At the deepest of all commands in mongo go to Mongo::Socket
-# and the following methods:
-#
-# - :read
-# - :write
+module Peek
+  # Query times are logged by timing the Socket class of the Mongo Ruby Driver
+  module MongoSocketInstrumented
+    def read(*args, &block)
+      start = Time.now
+      super(*args, &block)
+    ensure
+      duration = (Time.now - start)
+      ::Mongo::Socket.query_time.update { |value| value + duration }
+    end
 
-# Instrument Mongo time
-class Mongo::Socket
-  def read_with_timing(*args, &block)
-    start = Time.now
-    read_without_timing(*args, &block)
-  ensure
-    update_counters(start)
+    def write(*args, &block)
+      start = Time.now
+      super(*args, &block)
+    ensure
+      duration = (Time.now - start)
+      ::Mongo::Socket.query_time.update { |value| value + duration }
+    end
   end
-  alias_method_chain :read, :timing
 
-  def write_with_timing(*args, &block)
-    start = Time.now
-    write_without_timing(*args, &block)
-  ensure
-    update_counters(start)
-  end
-  alias_method_chain :write, :timing
-
-  def update_counters(start)
-    duration = (Time.now - start)
-
-    Peek::Views::Mongo.command_time.update { |value| value + duration }
+  # Query counts are logged to the Socket class by monitoring payload generation
+  module MongoProtocolInstrumented
+    def payload
+      super
+    ensure
+      ::Mongo::Protocol::Message.query_count.update { |value| value + 1 }
+    end
   end
 end
 
-# a better way to count all Mongo calls, is to look at the payload generation
-module Mongo
-  module Protocol
-    class Query
-      def payload_with_counter
-        payload_without_counter
-      ensure
-        Peek::Views::Mongo.command_count.update { |value| value + 1 }
-      end
-
-      alias_method_chain :payload, :counter
-    end
-
-    class Insert
-      def payload_with_counter
-        payload_without_counter
-      ensure
-        Peek::Views::Mongo.command_count.update { |value| value + 1 }
-      end
-
-      alias_method_chain :payload, :counter
-    end
-
-    class Update
-      def payload_with_counter
-        payload_without_counter
-      ensure
-        Peek::Views::Mongo.command_count.update { |value| value + 1 }
-      end
-
-      alias_method_chain :payload, :counter
-    end
-
-    class GetMore
-      def payload_with_counter
-        payload_without_counter
-      ensure
-        Peek::Views::Mongo.command_count.update { |value| value + 1 }
-      end
-
-      alias_method_chain :payload, :counter
-    end
-
-    class Delete
-      def payload_with_counter
-        payload_without_counter
-      ensure
-        Peek::Views::Mongo.command_count.update { |value| value + 1 }
-      end
-
-      alias_method_chain :payload, :counter
-    end
+# The Socket class will keep track of timing
+# The MongoSocketInstrumented class overrides the read and write methods, rerporting the total count as the attribute :query_count
+class Mongo::Socket
+  prepend Peek::MongoSocketInstrumented
+  class << self
+    attr_accessor :query_time
   end
+  self.query_time = Concurrent::AtomicFixnum.new(0)
+end
+
+# The Message class will keep track of count
+# Nothing is overridden here, only an attribute for counting is added
+class Mongo::Protocol::Message
+  class << self
+    attr_accessor :query_count
+  end
+  self.query_count = Concurrent::AtomicFixnum.new(0)
+end
+
+## Following classes all override the various Mongo command classes in Protocol to add counting
+# The actual counting for each class is stored in Mongo::Protocol::Message
+
+class Mongo::Protocol::Query
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::Insert
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::Update
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::GetMore
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::Delete
+  prepend Peek::MongoProtocolInstrumented
 end
 
 module Peek
   module Views
     class Mongo < View
-      class << self
-        attr_accessor :command_time, :command_count
+      def duration
+        ::Mongo::Socket.query_time.value
       end
-
-      self.command_count = Concurrent::AtomicFixnum.new(0)
-      self.command_time = Concurrent::AtomicFixnum.new(0)
 
       def formatted_duration
         ms = duration * 1000
@@ -106,12 +89,8 @@ module Peek
         end
       end
 
-      def duration
-        Peek::Views::Mongo.command_time.value
-      end
-
       def calls
-        Peek::Views::Mongo.command_count.value
+        ::Mongo::Protocol::Message.query_count.value
       end
 
       def results
@@ -122,9 +101,9 @@ module Peek
 
       def setup_subscribers
         # Reset each counter when a new request starts
-        before_request do
-          Peek::Views::Mongo.command_time.value = 0
-          Peek::Views::Mongo.command_count.value = 0
+        subscribe 'start_processing.action_controller' do
+          ::Mongo::Socket.query_time.value = 0
+          ::Mongo::Protocol::Message.query_count.value = 0
         end
       end
     end
