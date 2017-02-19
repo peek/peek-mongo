@@ -1,57 +1,83 @@
 require 'mongo'
-require 'atomic'
+require 'concurrent'
 
-# At the deepest of all commands in mongo go to Mongo::Connection
-# and the following methods:
-#
-# - :send_message
-# - :send_message_with_gle
-# - :receive_message
+module Peek
+  # Query times are logged by timing the Socket class of the Mongo Ruby Driver
+  module MongoSocketInstrumented
+    def read(*args, &block)
+      start = Time.now
+      super(*args, &block)
+    ensure
+      duration = (Time.now - start)
+      ::Mongo::Socket.query_time.update { |value| value + duration }
+    end
 
-# Instrument Mongo time
-class Mongo::Connection
+    def write(*args, &block)
+      start = Time.now
+      super(*args, &block)
+    ensure
+      duration = (Time.now - start)
+      ::Mongo::Socket.query_time.update { |value| value + duration }
+    end
+  end
+
+  # Query counts are logged to the Socket class by monitoring payload generation
+  module MongoProtocolInstrumented
+    def payload
+      super
+    ensure
+      ::Mongo::Protocol::Message.query_count.update { |value| value + 1 }
+    end
+  end
+end
+
+# The Socket class will keep track of timing
+# The MongoSocketInstrumented class overrides the read and write methods, rerporting the total count as the attribute :query_count
+class Mongo::Socket
+  prepend Peek::MongoSocketInstrumented
   class << self
-    attr_accessor :command_time, :command_count
+    attr_accessor :query_time
   end
-  self.command_count = Atomic.new(0)
-  self.command_time = Atomic.new(0)
+  self.query_time = Concurrent::AtomicFixnum.new(0)
+end
 
-  def send_message_with_timing(*args)
-    start = Time.now
-    send_message_without_timing(*args)
-  ensure
-    duration = (Time.now - start)
-    Mongo::Connection.command_time.update { |value| value + duration }
-    Mongo::Connection.command_count.update { |value| value + 1 }
+# The Message class will keep track of count
+# Nothing is overridden here, only an attribute for counting is added
+class Mongo::Protocol::Message
+  class << self
+    attr_accessor :query_count
   end
-  alias_method_chain :send_message, :timing
+  self.query_count = Concurrent::AtomicFixnum.new(0)
+end
 
-  def send_message_with_gle_with_timing(*args)
-    start = Time.now
-    send_message_with_gle_without_timing(*args)
-  ensure
-    duration = (Time.now - start)
-    Mongo::Connection.command_time.update { |value| value + duration }
-    Mongo::Connection.command_count.update { |value| value + 1 }
-  end
-  alias_method_chain :send_message_with_gle, :timing
+## Following classes all override the various Mongo command classes in Protocol to add counting
+# The actual counting for each class is stored in Mongo::Protocol::Message
 
-  def receive_message_with_timing(*args)
-    start = Time.now
-    receive_message_without_timing(*args)
-  ensure
-    duration = (Time.now - start)
-    Mongo::Connection.command_time.update { |value| value + duration }
-    Mongo::Connection.command_count.update { |value| value + 1 }
-  end
-  alias_method_chain :receive_message, :timing
+class Mongo::Protocol::Query
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::Insert
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::Update
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::GetMore
+  prepend Peek::MongoProtocolInstrumented
+end
+
+class Mongo::Protocol::Delete
+  prepend Peek::MongoProtocolInstrumented
 end
 
 module Peek
   module Views
     class Mongo < View
       def duration
-        ::Mongo::Connection.command_time.value
+        ::Mongo::Socket.query_time.value
       end
 
       def formatted_duration
@@ -64,7 +90,7 @@ module Peek
       end
 
       def calls
-        ::Mongo::Connection.command_count.value
+        ::Mongo::Protocol::Message.query_count.value
       end
 
       def results
@@ -75,9 +101,9 @@ module Peek
 
       def setup_subscribers
         # Reset each counter when a new request starts
-        before_request do
-          ::Mongo::Connection.command_time.value = 0
-          ::Mongo::Connection.command_count.value = 0
+        subscribe 'start_processing.action_controller' do
+          ::Mongo::Socket.query_time.value = 0
+          ::Mongo::Protocol::Message.query_count.value = 0
         end
       end
     end
