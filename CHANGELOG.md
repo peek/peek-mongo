@@ -9,3 +9,7 @@
 # 1.1.0
 
 - Query count and Query time are now threadsafe.
+
+# 1.2.0
+
+- Use `Module#prepend` over `alias_method_chain` - #4 @NJ-Scioly
